@@ -38,12 +38,27 @@ class MemoryRetriever:
             if res["message_id"] not in recent_ids:
                 filtered_results.append(res)
 
-        # 4. 長期記憶 (要約メモリ) の読み込み
+        # 4. 長期記憶 (要約メモリ) の読み込み (末尾から最大約2,000文字に制限)
         long_term_content = ""
         if LTM_PATH.exists():
             try:
+                file_size = LTM_PATH.stat().st_size
+                limit_chars = 2000
+                # 日本語UTF-8のマルチバイトを考慮し、1文字最大3バイトとしてシーク位置を決定
+                seek_offset = limit_chars * 3
+                
                 async with aiofiles.open(LTM_PATH, mode="r", encoding="utf-8") as f:
-                    long_term_content = await f.read()
+                    if file_size > seek_offset:
+                        await f.seek(file_size - seek_offset)
+                        raw_content = await f.read()
+                        # マルチバイト破損を避けるため、シーク直後の最初の改行文字以降を取得
+                        first_newline = raw_content.find("\n")
+                        if first_newline != -1:
+                            long_term_content = raw_content[first_newline + 1:]
+                        else:
+                            long_term_content = raw_content
+                    else:
+                        long_term_content = await f.read()
             except Exception as e:
                 logger.warning(f"Failed to read long-term memory: {e}")
 

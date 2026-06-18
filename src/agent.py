@@ -46,50 +46,10 @@ class AgentReply(BaseModel):
 
 class AIAgent:
     """Gemini API を用いた思考判定と返答生成エージェント"""
-    def __init__(self):
+    def __init__(self, gemini_client, persona_manager):
         self.config = config
-        self.client = genai.Client()
-        self.persona_dir = Path(__file__).parent.parent / "persona"
-        self._persona_cache = {
-            "identity": "",
-            "soul": "",
-            "agents": ""
-        }
-        self._persona_mtimes = {
-            "identity": 0.0,
-            "soul": 0.0,
-            "agents": 0.0
-        }
-
-    async def _load_persona(self) -> dict:
-        """
-        persona/ ディレクトリの md ファイルを読み込む。
-        mtime (最終更新時刻) をチェックし、更新があれば再読込してキャッシュを更新する（ホットリロード）。
-        """
-        files = {
-            "identity": self.persona_dir / "IDENTITY.md",
-            "soul": self.persona_dir / "SOUL.md",
-            "agents": self.persona_dir / "AGENTS.md"
-        }
-        
-        for key, filepath in files.items():
-            try:
-                if filepath.exists():
-                    current_mtime = filepath.stat().st_mtime
-                    if current_mtime > self._persona_mtimes[key]:
-                        with open(filepath, "r", encoding="utf-8") as f:
-                            self._persona_cache[key] = f.read().strip()
-                        self._persona_mtimes[key] = current_mtime
-                        logger.info(f"Loaded/Reloaded persona file: {filepath.name} (mtime={current_mtime})")
-                else:
-                    logger.warning(f"Persona file not found: {filepath}")
-                    self._persona_cache[key] = ""
-            except Exception as e:
-                logger.error(f"Error loading persona file {filepath}: {e}")
-                if not self._persona_cache[key]:
-                    self._persona_cache[key] = ""
-                    
-        return self._persona_cache
+        self.client = gemini_client
+        self.persona_manager = persona_manager
 
     async def evaluate_and_reply(
         self,
@@ -146,8 +106,7 @@ current_time: {time_display}
             contents.extend(image_parts)
         contents.append(prompt)
 
-        persona = await self._load_persona()
-        system_instruction = f"{persona['identity']}\n\n{persona['soul']}\n\n{persona['agents']}\n\n{self.config.evaluator_instruction}"
+        system_instruction = await self.persona_manager.get_evaluator_instruction(self.config.evaluator_instruction)
 
         response = await self.client.aio.models.generate_content(
             model=self.config.evaluator_model,
@@ -203,8 +162,7 @@ current_time: {time_display}
         if self.config.enable_code_execution:
             tools.append(types.Tool(code_execution=types.ToolCodeExecution))
 
-        persona = await self._load_persona()
-        system_instruction = f"{persona['identity']}\n\n{persona['soul']}\n\n{persona['agents']}\n\n{self.config.generator_instruction}"
+        system_instruction = await self.persona_manager.get_generator_instruction(self.config.generator_instruction)
 
         response = await self.client.aio.models.generate_content(
             model=model_name,
@@ -279,8 +237,7 @@ current_time: {time_display}
 # 過去の関連文脈
 {context}
 """
-        persona = await self._load_persona()
-        system_instruction = f"{persona['identity']}\n\n{persona['soul']}\n\n{persona['agents']}\n\n{self.config.generator_instruction}"
+        system_instruction = await self.persona_manager.get_generator_instruction(self.config.generator_instruction)
 
         response = await self.client.aio.models.generate_content(
             model=self.config.generator_model,

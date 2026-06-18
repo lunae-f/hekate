@@ -63,10 +63,19 @@ async def get_embedding_with_retry(client: genai.Client, text: str, model_name: 
 
 class QMDEngine:
     """QMD (Query Markup Documents) キャッシュおよび 2段階ハイブリッド検索エンジン"""
-    def __init__(self):
+    def __init__(self, db_conn, gemini_client):
         self.config = config
         self.tokenizer = SudachiTokenizer()
-        self.client = genai.Client()
+        self.conn = db_conn
+        self.client = gemini_client
+        self._background_tasks = set()
+
+    async def wait_for_tasks(self):
+        """仕掛かり中のバックグラウンドタスクがすべて完了するのを安全に待機する"""
+        if self._background_tasks:
+            logger.info(f"Waiting for {len(self._background_tasks)} background embedding tasks to complete...")
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            logger.info("All background embedding tasks completed.")
 
     async def ingest_message(
         self,
@@ -94,23 +103,22 @@ class QMDEngine:
         tokens_str = " ".join(token_list)
 
         # 2. SQLite への登録
-        async with get_db_connection() as conn:
-            await conn.execute("""
-            INSERT OR REPLACE INTO chat_history 
-            (message_id, timestamp, channel_id, channel_name, user_id, username, content, tokens, attachments)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                message_id,
-                timestamp.isoformat(),
-                channel_id,
-                channel_name,
-                user_id,
-                username,
-                content,
-                tokens_str,
-                attachments_json
-            ))
-            await conn.commit()
+        await self.conn.execute("""
+        INSERT OR REPLACE INTO chat_history 
+        (message_id, timestamp, channel_id, channel_name, user_id, username, content, tokens, attachments)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            message_id,
+            timestamp.isoformat(),
+            channel_id,
+            channel_name,
+            user_id,
+            username,
+            content,
+            tokens_str,
+            attachments_json
+        ))
+        await self.conn.commit()
 
         # 3. Markdownログファイルへのアペンド
         MEM_DIR.mkdir(parents=True, exist_ok=True)
@@ -146,7 +154,9 @@ class QMDEngine:
         logger.info(f"Message {message_id} ingested to SQLite (tokens cached) and Markdown backup.")
 
         # 4. 非同期での Embedding 取得タスクを起動 (直列またはバックグラウンド化でAPIバーストを許容)
-        asyncio.create_task(self._process_embedding(message_id, content))
+        task = asyncio.create_task(self._process_embedding(message_id, content))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def _process_embedding(self, message_id: str, content: str):
         """バックグラウンドで Embedding を取得して SQLite に保存する"""
@@ -154,12 +164,11 @@ class QMDEngine:
             vector = await get_embedding_with_retry(self.client, content, self.config.embedding_model)
             vector_blob = np.array(vector, dtype=np.float32).tobytes()
             
-            async with get_db_connection() as conn:
-                await conn.execute("""
-                INSERT OR REPLACE INTO embeddings (message_id, vector)
-                VALUES (?, ?)
-                """, (message_id, vector_blob))
-                await conn.commit()
+            await self.conn.execute("""
+            INSERT OR REPLACE INTO embeddings (message_id, vector)
+            VALUES (?, ?)
+            """, (message_id, vector_blob))
+            await self.conn.commit()
             logger.info(f"Successfully cached embedding vector for message {message_id}.")
         except Exception as e:
             # ログ出力をしてエラーをスルー
@@ -184,14 +193,13 @@ class QMDEngine:
         cutoff_date = now - relativedelta(months=limit_months)
         cutoff_iso = cutoff_date.isoformat()
 
-        async with get_db_connection() as conn:
-            cursor = await conn.execute("""
-            SELECT message_id, timestamp, channel_id, channel_name, user_id, username, content, tokens, attachments
-            FROM chat_history
-            WHERE timestamp >= ?
-            ORDER BY timestamp DESC
-            """, (cutoff_iso,))
-            rows = await cursor.fetchall()
+        cursor = await self.conn.execute("""
+        SELECT message_id, timestamp, channel_id, channel_name, user_id, username, content, tokens, attachments
+        FROM chat_history
+        WHERE timestamp >= ?
+        ORDER BY timestamp DESC
+        """, (cutoff_iso,))
+        rows = await cursor.fetchall()
             
         if not rows:
             return []
@@ -239,13 +247,12 @@ class QMDEngine:
         candidate_ids = [c["message_id"] for c in candidates]
         placeholders = ",".join("?" for _ in candidate_ids)
         
-        async with get_db_connection() as conn:
-            cursor = await conn.execute(f"""
-            SELECT message_id, vector
-            FROM embeddings
-            WHERE message_id IN ({placeholders})
-            """, candidate_ids)
-            vector_rows = await cursor.fetchall()
+        cursor = await self.conn.execute(f"""
+        SELECT message_id, vector
+        FROM embeddings
+        WHERE message_id IN ({placeholders})
+        """, candidate_ids)
+        vector_rows = await cursor.fetchall()
             
         vector_map = {}
         for vr in vector_rows:
