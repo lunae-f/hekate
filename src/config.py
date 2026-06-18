@@ -18,6 +18,7 @@ class Config:
         self.model_cheap = "gemini-3.1-flash-lite"
         self.model_premium = "gemini-3.5-flash"
         self.temperature = 0.2
+        self.enable_code_execution = False
         self.system_instruction = ""
         self.evaluator_instruction = ""
         self.generator_instruction = ""
@@ -51,6 +52,7 @@ class Config:
         self.model_cheap = gemini.get("model_cheap", self.model_cheap)
         self.model_premium = gemini.get("model_premium", self.model_premium)
         self.temperature = float(gemini.get("temperature", self.temperature))
+        self.enable_code_execution = bool(gemini.get("enable_code_execution", self.enable_code_execution))
         self.system_instruction = gemini.get("system_instruction", self.system_instruction).strip()
         self.evaluator_instruction = gemini.get("evaluator_instruction", self.system_instruction).strip()
         self.generator_instruction = gemini.get("generator_instruction", self.system_instruction).strip()

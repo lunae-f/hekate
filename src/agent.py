@@ -149,6 +149,10 @@ current_time: {time_display}
             contents.extend(image_parts)
         contents.append(prompt)
 
+        tools = []
+        if self.config.enable_code_execution:
+            tools.append(types.Tool(code_execution=types.ToolCodeExecution))
+
         response = await self.client.aio.models.generate_content(
             model=model_name,
             contents=contents,
@@ -157,6 +161,7 @@ current_time: {time_display}
                 temperature=self.config.temperature,
                 response_mime_type="application/json",
                 response_schema=AgentReply,
+                tools=tools if tools else None,
             )
         )
         
