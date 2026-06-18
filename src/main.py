@@ -574,8 +574,11 @@ async def process_debounce_messages(channel_id: int):
             # 1. 添付ファイルがある場合
             file_to_send = None
             if reply.attachment_content and reply.attachment_filename:
-                # メモリ上でバイナリファイルを作成して添付
-                file_io = io.BytesIO(reply.attachment_content.encode("utf-8"))
+                # メモリ上でバイナリまたはテキストファイルを作成して添付
+                content_bytes = reply.attachment_content
+                if isinstance(content_bytes, str):
+                    content_bytes = content_bytes.encode("utf-8")
+                file_io = io.BytesIO(content_bytes)
                 file_to_send = discord.File(file_io, filename=reply.attachment_filename)
             
             # 2. 返答テキストがDiscord制限を超える場合は自動ファイル化
@@ -616,7 +619,8 @@ async def process_debounce_messages(channel_id: int):
                 try:
                     embed_err = discord.Embed(title="Error ❌", description=f"処理中にエラーが発生しました: {e}", color=0xe74c3c)
                     await status_msg.edit(embed=embed_err, view=None)
-                    await asyncio.sleep(5)
+                    # エラーメッセージを30秒間残す
+                    await asyncio.sleep(30)
                     await status_msg.delete()
                 except discord.errors.NotFound:
                     pass

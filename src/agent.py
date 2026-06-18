@@ -4,7 +4,12 @@ import datetime
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Union
+
+try:
+    import json_repair
+except ImportError:
+    json_repair = None
 
 from src.config import config
 
@@ -35,8 +40,8 @@ class AgentEvaluationAndReply(BaseModel):
 
 class AgentReply(BaseModel):
     reply_content: str = Field(description="返答のメインメッセージ。ファイルを添付する場合はその説明")
-    attachment_content: Optional[str] = Field(None, description="添付テキストファイルとして送信したい長文内容 (ソースコードやログ等)。不要なら省略")
-    attachment_filename: Optional[Optional[str]] = Field(None, description="添付ファイルのファイル名 (例: 'code.py', 'result.txt')。添付がある場合は必須")
+    attachment_content: Optional[Union[str, bytes]] = Field(None, description="添付ファイルとして送信したい長文内容またはバイナリデータ。不要なら省略")
+    attachment_filename: Optional[Optional[str]] = Field(None, description="添付ファイルのファイル名 (例: 'code.py', 'result.txt', 'image.png')。添付がある場合は必須")
 
 class AIAgent:
     """Gemini API を用いた思考判定と返答生成エージェント"""
@@ -165,13 +170,47 @@ current_time: {time_display}
             )
         )
         
-        data = json.loads(response.text)
+        # パース前に生のレスポンスを出力 (デバッグ用)
+        logger.debug(f"[Generator Raw Response] {response.text}")
+        
+        if json_repair:
+            data = json_repair.loads(response.text)
+        else:
+            data = json.loads(response.text)
         reply = AgentReply(**data)
+
+        # Geminiのコード実行（Code Execution）により画像等のバイナリが生成されたかチェック
+        try:
+            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data:
+                        # 画像データを抽出して添付ファイルとしてアタッチ
+                        reply.attachment_content = part.inline_data.data
+                        
+                        # ファイル名が設定されていない、または画像拡張子でない場合は自動でファイル名を決定
+                        mime = part.inline_data.mime_type or "image/png"
+                        ext = "png"
+                        if "jpeg" in mime or "jpg" in mime:
+                            ext = "jpg"
+                        elif "gif" in mime:
+                            ext = "gif"
+                            
+                        # アタッチメント名が空、または拡張子が画像でない場合は上書き
+                        if not reply.attachment_filename or not reply.attachment_filename.endswith(f".{ext}"):
+                            reply.attachment_filename = f"plot.{ext}"
+                            
+                        logger.info(f"Detected inline_data from code execution: mime={mime}, size={len(reply.attachment_content)} bytes. Attached as '{reply.attachment_filename}'.")
+                        break # 1つ目の画像を処理したら抜ける
+        except Exception as e:
+            logger.warning(f"Failed to check/extract inline_data from response: {e}")
 
         # 添付ファイル情報
         att_info = ""
         if reply.attachment_filename:
-            size_bytes = len(reply.attachment_content.encode("utf-8")) if reply.attachment_content else 0
+            if isinstance(reply.attachment_content, bytes):
+                size_bytes = len(reply.attachment_content)
+            else:
+                size_bytes = len(reply.attachment_content.encode("utf-8")) if reply.attachment_content else 0
             att_info = f", Attachment: '{reply.attachment_filename}' [{size_bytes} bytes]"
         
         reply_len = len(reply.reply_content) if reply.reply_content else 0
