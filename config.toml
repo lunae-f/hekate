@@ -1,6 +1,6 @@
 [system]
 timezone = "Asia/Tokyo"                # スケジュール判定などに使用するタイムゾーン
-log_level = "DEBUG"                     # ログ出力レベル (DEBUG, INFO, WARNING, ERROR)
+log_level = "INFO"                     # ログ出力レベル (DEBUG, INFO, WARNING, ERROR)
 
 [gemini]
 evaluator_model = "gemini-3.1-flash-lite"   # 応答要否の一次判定用モデル（安価・高速）
