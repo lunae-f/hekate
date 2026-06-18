@@ -473,6 +473,12 @@ async def process_debounce_messages(channel_id: int):
                         except Exception as e:
                             logger.warning(f"Failed to load image {att.filename}: {e}")
 
+            # 最新メッセージにテキスト添付ファイルの内容を結合
+            current_message_with_attachments = primary_msg.clean_content
+            for att in all_attachments:
+                if att["content"] is not None:
+                    current_message_with_attachments += f"\n\n--- 添付ファイル: {att['filename']} ---\n{att['content']}"
+
             # B) Evaluator による応答判定と一次回答生成
             now_iso = datetime.datetime.now(timezone).isoformat()
             decision = None
@@ -482,7 +488,7 @@ async def process_debounce_messages(channel_id: int):
                 decision = await agent.evaluate_and_reply(
                     context,
                     recent_history,
-                    primary_msg.clean_content,
+                    current_message_with_attachments,
                     str(primary_msg.id),
                     now_iso,
                     image_parts
@@ -551,7 +557,7 @@ async def process_debounce_messages(channel_id: int):
                 reply = await agent.generate_reply(
                     context, 
                     recent_history, 
-                    primary_msg.clean_content, 
+                    current_message_with_attachments,
                     str(primary_msg.id), 
                     config.model_premium, 
                     image_parts
