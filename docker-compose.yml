@@ -11,5 +11,6 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+      - ./persona:/app/persona
     environment:
       - TZ=Asia/Tokyo

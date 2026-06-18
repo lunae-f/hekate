@@ -18,6 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # アプリケーションコードをコピー
 COPY config.toml .
 COPY src/ ./src/
+COPY persona/ ./persona/
 
 # データ永続化ディレクトリを作成
 RUN mkdir -p data/memory data/index
