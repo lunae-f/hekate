@@ -1,0 +1,53 @@
+# Python キャッシュとコンパイル済みファイル
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 仮想環境
+.venv/
+venv/
+ENV/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 環境変数 (認証トークン等の秘匿情報を含むため除外)
+.env
+
+# 永続化データディレクトリ (SQLite DB、ベクトルキャッシュ、チャット履歴が含まれるため除外)
+data/
+
+# IDE やエディタ設定
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# OS固有のゴミファイル
+.DS_Store
+Thumbs.db
+
+# ログファイル
+logs*.txt
+
+# 一時スクリプトディレクトリ
+scratch/

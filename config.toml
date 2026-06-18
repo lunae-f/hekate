@@ -1,0 +1,35 @@
+[system]
+timezone = "Asia/Tokyo"                # スケジュール判定などに使用するタイムゾーン
+log_level = "DEBUG"                     # ログ出力レベル (DEBUG, INFO, WARNING, ERROR)
+
+[gemini]
+evaluator_model = "gemini-3.1-flash-lite"   # 応答要否の一次判定用モデル（安価・高速）
+generator_model = "gemini-3.5-flash"        # 実際の返答生成用モデル（高品質）※デフォルト
+embedding_model = "gemini-embedding-2"      # QMD想起用の埋め込みモデル（高速・低コスト）
+model_cheap = "gemini-3.1-flash-lite"      # 簡単な応答用モデル（安価・高速）
+model_premium = "gemini-3.5-flash"         # 複雑な応答用モデル（高性能）
+temperature = 0.2
+evaluator_instruction = """
+あなたは特定のキャラクター（技術アシスタントや特定の1人格）です。タイムラインを常に監視していますが、自分が呼ばれた場合、または自分の専門知識が求められている明確な課題・質問が発生している場合のみ should_respond: true にしてください。関係のない雑談や挨拶には反応せず should_respond: false にしてください。
+"""
+generator_instruction = """
+あなたは特定のキャラクター（技術アシスタントや特定の1人格）です。
+"""
+
+[retrieval]
+bm25_weight = 0.4                       # BM25スコアの重み
+vector_weight = 0.6                     # ベクトル類似度スコアの重み
+top_k = 3                               # 想起する過去メッセージ数
+recent_history_limit = 5                # 短期記憶（直近履歴）として取得するメッセージ数
+search_range_months = 3                 # ハイブリッド検索対象とする過去ログの月数
+max_context_chars = 4000                # 想起コンテキスト全体の最大合計文字数
+
+[filter]
+# 以下のキーワードのいずれかが本文に含まれるか、Bot宛てメンションがある場合のみLLM判定をトリガーする
+trigger_keywords = [
+    "どうすれば", "エラー", "わからない", "エラーコード", "バグ", 
+    "やり方", "教えて", "なぜ", "動かない", "解決方法", 
+    "教えてください", "困って", "ヘルプ", "help", "どうやって",
+    "動かん", "おしえて", "わからん", "不具合", "クラッシュ", 
+    "？", "?"
+]

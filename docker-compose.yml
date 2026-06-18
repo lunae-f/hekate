@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  discord-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: discord-agent-bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=Asia/Tokyo
