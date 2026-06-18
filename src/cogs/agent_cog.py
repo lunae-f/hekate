@@ -193,7 +193,6 @@ class AgentCog(commands.Cog):
             primary_msg.reference.cached_message and 
             primary_msg.reference.cached_message.author == self.bot.user
         )
-        is_joined_thread = isinstance(channel, discord.Thread) and channel.me is not None
         has_attachments = len(all_attachments) > 0
 
         matched_keyword = None
@@ -202,7 +201,7 @@ class AgentCog(commands.Cog):
                 matched_keyword = kw
                 break
         has_trigger_keyword = matched_keyword is not None
-        is_triggered = has_mention or is_joined_thread or has_attachments or has_trigger_keyword
+        is_triggered = has_mention or has_attachments or has_trigger_keyword
 
         if not is_triggered:
             logger.debug(f"Message {primary_msg.id} skipped: No trigger detected.")
@@ -211,7 +210,6 @@ class AgentCog(commands.Cog):
         reasons = []
         if has_mention: reasons.append("メンション検知")
         if has_trigger_keyword: reasons.append(f"キーワード '{matched_keyword}' を検出")
-        if is_joined_thread: reasons.append("アクティブスレッド")
         if has_attachments: reasons.append("添付ファイル検知")
         
         reason_str = " / ".join(reasons)
