@@ -105,7 +105,6 @@ class AgentCog(commands.Cog):
             embed.add_field(name="返答モデル", value=config.generator_model, inline=True)
             embed.add_field(name="登録スケジュール数", value=str(len(tasks_list)), inline=True)
             embed.add_field(name="キャッシュされたログ件数", value=f"{log_count} 件", inline=True)
-            embed.add_field(name="トリガーキーワード数", value=f"{len(config.trigger_keywords)} 個", inline=True)
             
             await interaction.followup.send(embed=embed)
         except Exception as e:
@@ -193,24 +192,14 @@ class AgentCog(commands.Cog):
             primary_msg.reference.cached_message and 
             primary_msg.reference.cached_message.author == self.bot.user
         )
-        has_attachments = len(all_attachments) > 0
 
-        matched_keyword = None
-        for kw in config.trigger_keywords:
-            if kw in ingest_content:
-                matched_keyword = kw
-                break
-        has_trigger_keyword = matched_keyword is not None
-        is_triggered = has_mention or has_attachments or has_trigger_keyword
+        is_triggered = has_mention
 
         if not is_triggered:
             logger.debug(f"Message {primary_msg.id} skipped: No trigger detected.")
             return
 
-        reasons = []
-        if has_mention: reasons.append("メンション検知")
-        if has_trigger_keyword: reasons.append(f"キーワード '{matched_keyword}' を検出")
-        if has_attachments: reasons.append("添付ファイル検知")
+        reasons = ["メンション検知"]
         
         reason_str = " / ".join(reasons)
         logger.info(f"Message {primary_msg.id} triggered LLM evaluation. (Reason: {reason_str})")

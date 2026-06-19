@@ -30,8 +30,6 @@ class Config:
         self.search_range_months = 3
         self.max_context_chars = 4000
         
-        self.trigger_keywords = []
-        
         self.load()
 
     def load(self):
@@ -64,8 +62,5 @@ class Config:
         self.recent_history_limit = int(retrieval.get("recent_history_limit", self.recent_history_limit))
         self.search_range_months = int(retrieval.get("search_range_months", self.search_range_months))
         self.max_context_chars = int(retrieval.get("max_context_chars", self.max_context_chars))
-        
-        filt = data.get("filter", {})
-        self.trigger_keywords = filt.get("trigger_keywords", self.trigger_keywords)
 
 config = Config()
