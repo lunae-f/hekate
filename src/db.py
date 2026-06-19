@@ -7,10 +7,12 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent.parent
 DB_DIR = ROOT_DIR / "data" / "index"
 DB_PATH = DB_DIR / "agent.db"
+ATTACHMENTS_DIR = ROOT_DIR / "data" / "attachments"
 
 async def init_db():
     # 保存ディレクトリの作成
     DB_DIR.mkdir(parents=True, exist_ok=True)
+    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
     
     async with aiosqlite.connect(DB_PATH) as db:
         # SQLiteの外部キー制約を明示的に有効化

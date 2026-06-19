@@ -29,6 +29,20 @@ class TaskScheduleInstruction(BaseModel):
     tool_name: Optional[str] = Field(None, description="プログラム実行用のツール名 (将来用)。不要なら省略")
     tool_args: Optional[str] = Field(None, description="ツール実行用のJSONパラメータ (将来用)。不要なら省略")
 
+class ContextRequest(BaseModel):
+    reason: str = Field(description="なぜ追加のコンテキストが必要か（例: '〇〇に関する過去のやり取りを確認するため'）")
+    request_type: Literal["offset", "date"] = Field(
+        description="追加取得のタイプ。直近からさらに過去へ遡る場合は 'offset'、特定の年月日を指定する場合は 'date' を指定"
+    )
+    offset_count: int = Field(
+        15, 
+        description="request_type が 'offset' の場合に、さらに何件遡るか（推奨: 15〜30）"
+    )
+    target_date: Optional[str] = Field(
+        None, 
+        description="request_type が 'date' の場合に、取得したい特定の年月日（フォーマット: 'YYYY-MM-DD'）"
+    )
+
 class AgentEvaluationAndReply(BaseModel):
     internal_monologue: str = Field(description="現在の会話状況の分析と応答要否・難易度評価の思考プロセス")
     should_respond: bool = Field(description="自身が応答すべき、またはタスク予約を実行すべきと判断した場合は True")
@@ -38,6 +52,8 @@ class AgentEvaluationAndReply(BaseModel):
     attachment_content: Optional[str] = Field(None, description="添付テキストファイルの内容。不要なら省略（requires_escalation が True の場合は省略）")
     attachment_filename: Optional[str] = Field(None, description="添付ファイルのファイル名。不要なら省略")
     new_schedule: Optional[TaskScheduleInstruction] = Field(None, description="スケジュール情報。不要なら省略")
+    requires_more_context: bool = Field(False, description="現在の履歴範囲だけでは情報が不足し、さらに古い過去ログや特定日付のログが必要であると判断した場合は True。これを True にする場合、reply_content は空にしてください。")
+    context_request: Optional[ContextRequest] = Field(None, description="requires_more_context が True の場合に指定する、追加コンテキストの要求仕様。不要なら省略")
 
 class AgentReply(BaseModel):
     reply_content: str = Field(description="返答のメインメッセージ。ファイルを添付する場合はその説明")
@@ -54,7 +70,7 @@ class AIAgent:
     async def evaluate_and_reply(
         self,
         context: str,
-        recent_history: str,
+        recent_history: list,
         current_message: str,
         channel_name: str,
         message_id: str,
@@ -79,8 +95,7 @@ class AIAgent:
             time_display = current_time_iso
             example_iso = "2026-06-18T12:30:00+09:00"
 
-        prompt = f"""
-current_time: {time_display}
+        prompt_meta = f"""current_time: {time_display}
 channel: #{channel_name}
 
 以下は過去の文脈および直近の会話履歴です。これらを踏まえて、最新メッセージに対して自分が応答すべきか、応答する場合に返答メッセージを生成し、かつより高性能なモデル（gemini-3.5-flash）へのエスカレーションが必要であるかを判定してください。
@@ -90,23 +105,26 @@ channel: #{channel_name}
 - 挨拶、簡単な雑談、単純な質問、一言の返答で済む軽い対話の場合は `requires_escalation: false` としてください。
 - 【重要】`requires_escalation: true` の場合、無駄なトークン消費を防ぐため、`reply_content` は必ず空文字（""）にしてください。
 
+■ 過去ログの追加要求ルール (requires_more_context):
+- 現在の履歴範囲だけでは「前回の画像」「さっきの件」などが何を指しているか判断できない場合、`requires_more_context: true` に設定し、`context_request` を返してさらに過去ログを取得させることができます。
+- 過去ログ要求は最大3回までしか実行できません。
+
 もし定期タスクの登録依頼である場合は、必ず上記「現在日時」を基準にしてスケジュール（cron_expression または run_at）を正確に解釈・抽出してください。
 相対的な日時（例：「12:30になったら」）は、現在日時の日付部分を継承し、将来の正確な絶対日時（例：{example_iso} などのISO8601形式）として登録する必要があります。
-
-# 過去の関連文脈 (想起記憶)
-{context}
-
-# 直近の会話履歴 (短期記憶)
-{recent_history}
-
-# 最新メッセージ
-{current_message}
 """
-        logger.debug(f"[Evaluator Prompt]\n{prompt}")
+
+        logger.debug(f"[Evaluator Prompt]\n{prompt_meta}")
         contents = []
+        contents.append(prompt_meta)
+        contents.append(f"\n# 過去の関連文脈 (想起記憶)\n{context}\n")
+        contents.append("\n# 直近の会話履歴 (短期記憶)\n")
+        
+        for part in recent_history:
+            contents.append(part)
+            
+        contents.append(f"\n# 最新メッセージ\n{current_message}")
         if image_parts:
             contents.extend(image_parts)
-        contents.append(prompt)
 
         system_instruction = await self.persona_manager.get_evaluator_instruction(self.config.evaluator_instruction)
 
@@ -132,7 +150,7 @@ channel: #{channel_name}
     async def generate_reply(
         self,
         context: str,
-        recent_history: str,
+        recent_history: list,
         current_message: str,
         channel_name: str,
         message_id: str,
@@ -144,24 +162,21 @@ channel: #{channel_name}
         """
         logger.info(f"Generating reply with {model_name}...")
 
-        prompt = f"""
-channel: #{channel_name}
+        prompt_meta = f"""channel: #{channel_name}
 
 以下は過去の関連文脈および直近の会話履歴です。最新のメッセージに対して、キャラクター設定に従って適切な返答を生成してください。長文コードなどを出力する場合は、適宜アタッチメントファイル（attachment_content）に格納して出力してください。
-
-# 過去の関連文脈 (想起記憶)
-{context}
-
-# 直近の会話履歴 (短期記憶)
-{recent_history}
-
-# 最新メッセージ
-{current_message}
 """
         contents = []
+        contents.append(prompt_meta)
+        contents.append(f"\n# 過去の関連文脈 (想起記憶)\n{context}\n")
+        contents.append("\n# 直近の会話履歴 (短期記憶)\n")
+        
+        for part in recent_history:
+            contents.append(part)
+            
+        contents.append(f"\n# 最新メッセージ\n{current_message}")
         if image_parts:
             contents.extend(image_parts)
-        contents.append(prompt)
 
         tools = []
         if self.config.enable_code_execution:

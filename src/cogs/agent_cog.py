@@ -278,13 +278,45 @@ class AgentCog(commands.Cog):
             full_content_lines.append(user_prefix + msg.clean_content)
 
             for att in msg.attachments:
-                att_data = {"filename": att.filename, "content": None}
-                if att.content_type and (att.content_type.startswith("text/") or att.filename.endswith((".py", ".json", ".toml", ".yaml", ".ini", ".md", ".js", ".ts"))):
+                att_data = {"filename": att.filename, "content": None, "local_path": None}
+                
+                # 画像の判定
+                is_image = False
+                mime_type = att.content_type
+                if mime_type and mime_type.startswith("image/"):
+                    is_image = True
+                else:
+                    ext = att.filename.split(".")[-1].lower() if "." in att.filename else ""
+                    if ext in ("png", "jpg", "jpeg", "webp", "gif"):
+                        is_image = True
+                        mime_type = f"image/{'jpeg' if ext == 'jpg' else ext}"
+
+                # 画像の場合、ローカルに保存
+                if is_image:
+                    try:
+                        img_bytes = await att.read()
+                        save_dir = Path(__file__).parent.parent.parent / "data" / "attachments"
+                        save_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        save_name = f"{msg.id}_{att.filename}"
+                        save_path = save_dir / save_name
+                        
+                        async with aiofiles.open(save_path, mode="wb") as f_img:
+                            await f_img.write(img_bytes)
+                            
+                        att_data["local_path"] = f"data/attachments/{save_name}"
+                        logger.info(f"Saved attachment image to {att_data['local_path']}")
+                    except Exception as e:
+                        logger.warning(f"Failed to save image attachment {att.filename}: {e}")
+
+                # テキスト系ファイルの場合、中身を読み込む
+                elif att.content_type and (att.content_type.startswith("text/") or att.filename.endswith((".py", ".json", ".toml", ".yaml", ".ini", ".md", ".js", ".ts"))):
                     try:
                         bytes_data = await att.read()
                         att_data["content"] = bytes_data.decode("utf-8", errors="ignore")
                     except Exception as e:
                         logger.warning(f"Failed to read text attachment {att.filename}: {e}")
+                
                 all_attachments.append(att_data)
 
         ingest_content = "\n".join(full_content_lines)
@@ -352,42 +384,96 @@ class AgentCog(commands.Cog):
                     {"message_id": str(m.id), "username": m.author.display_name, "content": m.clean_content} for m in messages
                 ])
 
-                # データベースから、今回のメッセージを除く直近15件のメッセージを取得
-                recent_ids = [str(m.id) for m in messages]
-                placeholders = ",".join(["?"] * len(recent_ids))
-                
-                cursor = await self.context.db_conn.execute(f"""
-                SELECT username, content, timestamp
-                FROM chat_history
-                WHERE channel_id = ? AND message_id NOT IN ({placeholders})
-                ORDER BY timestamp DESC
-                LIMIT 15
-                """, (str(channel.id), *recent_ids))
-                history_rows = await cursor.fetchall()
-                
-                # 時系列順（昇順）に並べ替え
-                history_rows = sorted(history_rows, key=lambda r: r["timestamp"])
-                
-                recent_history_lines = []
-                for row in history_rows:
-                    recent_history_lines.append(f"{row['username']}: {row['content']}")
-                
-                # デバウンスバッファに複数メッセージがある場合、最後の1つ以外を末尾に追加
-                for msg in messages[:-1]:
-                    recent_history_lines.append(f"{msg.author.display_name}: {msg.clean_content}")
+                # インナー関数: 過去の履歴をデータベースから取得し、画像を含む時系列リストとしてパースする
+                async def load_recent_history_parts(offset: int, date_str: str = None) -> list:
+                    recent_ids = [str(m.id) for m in messages]
+                    placeholders = ",".join(["?"] * len(recent_ids))
                     
-                recent_history = "\n".join(recent_history_lines)
+                    history_rows = []
+                    try:
+                        if date_str:
+                            # 特定の日付 (YYYY-MM-DD) のログを最大30件取得
+                            date_start = f"{date_str}T00:00:00"
+                            date_end = f"{date_str}T23:59:59"
+                            cursor_hist = await self.context.db_conn.execute(f"""
+                            SELECT message_id, username, content, timestamp, attachments
+                            FROM chat_history
+                            WHERE channel_id = ? AND timestamp >= ? AND timestamp <= ? AND message_id NOT IN ({placeholders})
+                            ORDER BY timestamp DESC
+                            LIMIT 30
+                            """, (str(channel.id), date_start, date_end, *recent_ids))
+                            history_rows = await cursor_hist.fetchall()
+                        else:
+                            # 件数ベースでの過去遡り取得
+                            cursor_hist = await self.context.db_conn.execute(f"""
+                            SELECT message_id, username, content, timestamp, attachments
+                            FROM chat_history
+                            WHERE channel_id = ? AND message_id NOT IN ({placeholders})
+                            ORDER BY timestamp DESC
+                            LIMIT ?
+                            """, (str(channel.id), *recent_ids, offset))
+                            history_rows = await cursor_hist.fetchall()
+                    except Exception as e_db:
+                        logger.error(f"Failed to query chat_history for context: {e_db}")
+                        
+                    # 時系列順（昇順）に並べ替え
+                    history_rows = sorted(history_rows, key=lambda r: r["timestamp"])
+                    
+                    parts = []
+                    for row in history_rows:
+                        # メッセージテキストを追加
+                        parts.append(f"{row['username']}: {row['content']}")
+                        
+                        # 画像アタッチメントがあればローカルからロード
+                        if row["attachments"]:
+                            try:
+                                atts = json.loads(row["attachments"])
+                                for att in atts:
+                                    local_path = att.get("local_path")
+                                    if local_path:
+                                        p_path = Path(__file__).parent.parent.parent / local_path
+                                        if p_path.exists():
+                                            async with aiofiles.open(p_path, mode="rb") as f_img:
+                                                img_bytes = await f_img.read()
+                                            ext = local_path.split(".")[-1].lower()
+                                            mime = f"image/{'jpeg' if ext == 'jpg' else ext}"
+                                            part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+                                            parts.append(part)
+                                            logger.info(f"Loaded past image context: {local_path}")
+                            except Exception as e_load:
+                                logger.warning(f"Failed to load past image for message {row['message_id']}: {e_load}")
+                                
+                    # 今回のデバウンスしたメッセージバッファ（最後の1個以外）と画像も追加
+                    for msg in messages[:-1]:
+                        parts.append(f"{msg.author.display_name}: {msg.clean_content}")
+                        for att in msg.attachments:
+                            ext = att.filename.split(".")[-1].lower() if "." in att.filename else ""
+                            if (att.content_type and att.content_type.startswith("image/")) or ext in ("png", "jpg", "jpeg", "webp", "gif"):
+                                try:
+                                    img_bytes = await att.read()
+                                    mime = att.content_type or f"image/{'jpeg' if ext == 'jpg' else ext}"
+                                    part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+                                    parts.append(part)
+                                except Exception as e_img:
+                                    logger.warning(f"Failed to load debounce message image: {e_img}")
+                                    
+                    return parts
+
+                # 初期ロード（直近15件）
+                current_offset = 15
+                recent_history_parts = await load_recent_history_parts(current_offset)
 
                 image_parts = []
-                for msg in messages:
-                    for att in msg.attachments:
-                        if att.content_type and att.content_type.startswith("image/"):
-                            try:
-                                img_bytes = await att.read()
-                                part = types.Part.from_bytes(data=img_bytes, mime_type=att.content_type)
-                                image_parts.append(part)
-                            except Exception as e:
-                                logger.warning(f"Failed to load image {att.filename}: {e}")
+                for att in primary_msg.attachments:
+                    ext = att.filename.split(".")[-1].lower() if "." in att.filename else ""
+                    if (att.content_type and att.content_type.startswith("image/")) or ext in ("png", "jpg", "jpeg", "webp", "gif"):
+                        try:
+                            img_bytes = await att.read()
+                            mime = att.content_type or f"image/{'jpeg' if ext == 'jpg' else ext}"
+                            part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+                            image_parts.append(part)
+                        except Exception as e_img:
+                            logger.warning(f"Failed to load primary message image: {e_img}")
 
                 current_message_with_attachments = primary_msg.clean_content
                 for att in all_attachments:
@@ -397,20 +483,61 @@ class AgentCog(commands.Cog):
                 now_iso = datetime.datetime.now(self.timezone).isoformat()
                 decision = None
                 triggered_fallback = False
+                
+                # マルチターン過去ログ検索ループ
+                max_retries = 3
+                retry_count = 0
+                target_date = None
+                
+                while retry_count < max_retries:
+                    # 2回目以降のループ時に進捗をDiscord上のThinkingにフィードバック
+                    if retry_count > 0 and status_msg:
+                        try:
+                            step_desc = f"過去のログを探索しています... (残り {max_retries - retry_count} 回)"
+                            if target_date:
+                                step_desc = f"{target_date} のログを追加ロード中... (残り {max_retries - retry_count} 回)"
+                            elif current_offset > 15:
+                                step_desc = f"さらにメッセージを {current_offset - 15} 件遡っています... (残り {max_retries - retry_count} 回)"
+                                
+                            status_embed.description = step_desc
+                            await status_msg.edit(embed=status_embed)
+                        except discord.errors.NotFound:
+                            pass
+                        except Exception as e_status:
+                            logger.warning(f"Failed to update status message: {e_status}")
 
-                try:
-                    decision = await self.context.agent.evaluate_and_reply(
-                        context_data,
-                        recent_history,
-                        current_message_with_attachments,
-                        channel.name,
-                        str(primary_msg.id),
-                        now_iso,
-                        image_parts
-                    )
-                except Exception as e:
-                    logger.warning(f"Fallback triggered by evaluate_and_reply execution/parse error: {e}")
-                    triggered_fallback = True
+                    try:
+                        decision = await self.context.agent.evaluate_and_reply(
+                            context_data,
+                            recent_history_parts,
+                            current_message_with_attachments,
+                            channel.name,
+                            str(primary_msg.id),
+                            now_iso,
+                            image_parts
+                        )
+                    except Exception as e:
+                        logger.warning(f"Fallback triggered by evaluate_and_reply execution/parse error: {e}")
+                        triggered_fallback = True
+                        break
+
+                    # 追加要求がある場合
+                    if decision and decision.requires_more_context and decision.context_request:
+                        req = decision.context_request
+                        retry_count += 1
+                        
+                        if req.request_type == "date" and req.target_date:
+                            target_date = req.target_date
+                            logger.info(f"LLM requested context for date: {target_date} (Reason: {req.reason})")
+                            recent_history_parts = await load_recent_history_parts(0, date_str=target_date)
+                        else:
+                            current_offset += req.offset_count or 15
+                            if current_offset > 50:
+                                current_offset = 50
+                            logger.info(f"LLM requested context offset: +{req.offset_count or 15} (Total offset: {current_offset}) (Reason: {req.reason})")
+                            recent_history_parts = await load_recent_history_parts(current_offset)
+                    else:
+                        break
 
                 if decision is not None:
                     if decision.new_schedule:
@@ -438,9 +565,9 @@ class AgentCog(commands.Cog):
                             pass
                         return
 
-                    if decision.requires_escalation or decision.confidence_score <= 3:
+                    if decision.requires_escalation or decision.confidence_score <= 3 or decision.requires_more_context:
                         triggered_fallback = True
-                        logger.info(f"Fallback triggered by self-evaluation: confidence_score={decision.confidence_score}, requires_escalation={decision.requires_escalation}")
+                        logger.info(f"Fallback triggered: confidence_score={decision.confidence_score}, requires_escalation={decision.requires_escalation}, requires_more_context={decision.requires_more_context}")
 
                 status_embed.title = "Generating reply... ✍️"
                 status_embed.description = "返答を作成しています..."
@@ -462,7 +589,7 @@ class AgentCog(commands.Cog):
                     
                     reply = await self.context.agent.generate_reply(
                         context_data, 
-                        recent_history, 
+                        recent_history_parts, 
                         current_message_with_attachments,
                         channel.name,
                         str(primary_msg.id), 
