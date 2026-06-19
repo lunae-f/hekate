@@ -24,12 +24,26 @@ class AgentCog(commands.Cog):
         self.context = context
         self.timezone = pytz.timezone(config.timezone)
         self.debounce_buffers = {}
+        self.ignore_all = False
+        self.ignored_channels = set()
 
     async def cog_load(self):
-        """Cogロード時に深夜メモリ要約を開始する"""
+        """Cogロード時に深夜メモリ要約を開始し、設定をロードする"""
         if not self.daily_memory_consolidation.is_running():
             self.daily_memory_consolidation.start()
         logger.info("Daily memory consolidation task started.")
+
+        try:
+            cursor = await self.context.db_conn.execute("SELECT value FROM settings WHERE key = 'ignore_all'")
+            row = await cursor.fetchone()
+            self.ignore_all = (row["value"] == "true") if row else False
+
+            cursor = await self.context.db_conn.execute("SELECT channel_id FROM ignored_channels")
+            rows = await cursor.fetchall()
+            self.ignored_channels = {r["channel_id"] for r in rows}
+            logger.info(f"Loaded ignore settings: ignore_all={self.ignore_all}, ignored_channels={self.ignored_channels}")
+        except Exception as e:
+            logger.error(f"Failed to load ignore settings: {e}")
 
     async def cog_unload(self):
         """Cogアンロード時に深夜メモリ要約を停止する"""
@@ -110,6 +124,106 @@ class AgentCog(commands.Cog):
             await interaction.followup.send(embed=embed)
         except Exception as e:
             await interaction.followup.send(f"❌ ステータス取得に失敗しました: {e}")
+
+    # ignoreコマンドグループの定義
+    ignore_group = app_commands.Group(name="ignore", description="メッセージの監視無視（応答除外）設定を管理します。")
+
+    @ignore_group.command(name="channel", description="指定したチャンネルの自動応答を無視/無視解除します。")
+    @app_commands.describe(
+        action="無視リストへの操作を選択します。",
+        target_channel="対象のチャンネル（指定しない場合は現在のチャンネル）"
+    )
+    @app_commands.choices(action=[
+        app_commands.Choice(name="無視リストに追加", value="add"),
+        app_commands.Choice(name="無視リストから削除", value="remove")
+    ])
+    async def ignore_channel(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+        target_channel: discord.abc.GuildChannel = None
+    ):
+        logger.info(f"User {interaction.user.display_name} executed slash command /ignore channel action={action}")
+        await interaction.response.defer(ephemeral=True)
+        
+        # チャンネルの決定
+        chan = target_channel or interaction.channel
+        if not chan:
+            await interaction.followup.send("❌ チャンネルが特定できませんでした。")
+            return
+            
+        chan_id = str(chan.id)
+        chan_name = chan.name
+
+        try:
+            if action == "add":
+                await self.context.db_conn.execute(
+                    "INSERT OR REPLACE INTO ignored_channels (channel_id, channel_name) VALUES (?, ?)",
+                    (chan_id, chan_name)
+                )
+                await self.context.db_conn.commit()
+                self.ignored_channels.add(chan_id)
+                await interaction.followup.send(f"✅ チャンネル <#{chan_id}> を無視リストに追加しました。以降、メンション時を除き、自動応答（キーワード等）を無視します。")
+            else:
+                await self.context.db_conn.execute(
+                    "DELETE FROM ignored_channels WHERE channel_id = ?",
+                    (chan_id,)
+                )
+                await self.context.db_conn.commit()
+                self.ignored_channels.discard(chan_id)
+                await interaction.followup.send(f"✅ チャンネル <#{chan_id}> を無視リストから削除しました。通常通り自動応答します。")
+        except Exception as e:
+            logger.error(f"Failed to update channel ignore settings: {e}")
+            await interaction.followup.send(f"❌ 設定の更新に失敗しました: {e}")
+
+    @ignore_group.command(name="global", description="全チャンネルにおける自動応答の一括無視を切り替えます。")
+    @app_commands.describe(enabled="Trueで全チャンネル無視、Falseで解除")
+    async def ignore_global(self, interaction: discord.Interaction, enabled: bool):
+        logger.info(f"User {interaction.user.display_name} executed slash command /ignore global enabled={enabled}")
+        await interaction.response.defer(ephemeral=True)
+
+        val_str = "true" if enabled else "false"
+        try:
+            await self.context.db_conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('ignore_all', ?)",
+                (val_str,)
+            )
+            await self.context.db_conn.commit()
+            self.ignore_all = enabled
+            
+            status_text = "有効（一括無視）" if enabled else "無効（通常動作）"
+            await interaction.followup.send(f"✅ グローバル無視設定を **{status_text}** に変更しました。")
+        except Exception as e:
+            logger.error(f"Failed to update global ignore settings: {e}")
+            await interaction.followup.send(f"❌ 設定の更新に失敗しました: {e}")
+
+    @ignore_group.command(name="status", description="現在のメッセージ無視設定の一覧を確認します。")
+    async def ignore_status(self, interaction: discord.Interaction):
+        logger.info(f"User {interaction.user.display_name} executed slash command /ignore status")
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            cursor = await self.context.db_conn.execute("SELECT channel_id, channel_name FROM ignored_channels")
+            rows = await cursor.fetchall()
+            
+            embed = discord.Embed(title="⚙️ メッセージ無視（応答除外）設定ステータス", color=0x3498db)
+            
+            g_status = "🔴 有効（全チャンネルでメンション以外無視）" if self.ignore_all else "🟢 無効（通常応答）"
+            embed.add_field(name="グローバル無視設定", value=g_status, inline=False)
+            
+            if rows:
+                lines = [f"- <#{r['channel_id']}> (ID: {r['channel_id']})" for r in rows]
+                ch_list_str = "\n".join(lines)
+            else:
+                ch_list_str = "*無視設定されているチャンネルはありません。*"
+                
+            embed.add_field(name="無視設定チャンネル一覧", value=ch_list_str, inline=False)
+            embed.set_footer(text="※無視設定中のチャンネルでも、直接メンションまたは返信された場合は応答します。")
+            
+            await interaction.followup.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Failed to get ignore status: {e}")
+            await interaction.followup.send(f"❌ ステータスの取得に失敗しました: {e}")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -207,6 +321,15 @@ class AgentCog(commands.Cog):
         if not is_triggered:
             logger.debug(f"Message {primary_msg.id} skipped: No trigger detected.")
             return
+
+        # 無視設定のチェック（直接メンションがない場合のみ適用）
+        if not has_mention:
+            if self.ignore_all:
+                logger.info(f"Message {primary_msg.id} ignored: Global ignore is active.")
+                return
+            if str(channel.id) in self.ignored_channels:
+                logger.info(f"Message {primary_msg.id} ignored: Channel {channel_name} is in ignore list.")
+                return
 
         reasons = []
         if has_mention: reasons.append("メンション検知")

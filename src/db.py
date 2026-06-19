@@ -55,6 +55,22 @@ async def init_db():
         );
         """)
         
+        # 4. settings テーブルの作成 (グローバル設定)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """)
+
+        # 5. ignored_channels テーブルの作成 (無視するチャンネルリスト)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS ignored_channels (
+            channel_id TEXT PRIMARY KEY,
+            channel_name TEXT NOT NULL
+        );
+        """)
+        
         # 既存データベース向けの自動マイグレーション (user_id カラムの追加)
         async with db.execute("PRAGMA table_info(scheduled_tasks);") as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
