@@ -430,17 +430,20 @@ class AgentCog(commands.Cog):
                             try:
                                 atts = json.loads(row["attachments"])
                                 for att in atts:
-                                    local_path = att.get("local_path")
-                                    if local_path:
-                                        p_path = Path(__file__).parent.parent.parent / local_path
-                                        if p_path.exists():
-                                            async with aiofiles.open(p_path, mode="rb") as f_img:
-                                                img_bytes = await f_img.read()
-                                            ext = local_path.split(".")[-1].lower()
-                                            mime = f"image/{'jpeg' if ext == 'jpg' else ext}"
-                                            part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
-                                            parts.append(part)
-                                            logger.info(f"Loaded past image context: {local_path}")
+                                    if isinstance(att, dict):
+                                        local_path = att.get("local_path")
+                                        if local_path:
+                                            p_path = Path(__file__).parent.parent.parent / local_path
+                                            if p_path.exists():
+                                                async with aiofiles.open(p_path, mode="rb") as f_img:
+                                                    img_bytes = await f_img.read()
+                                                ext = local_path.split(".")[-1].lower()
+                                                mime = f"image/{'jpeg' if ext == 'jpg' else ext}"
+                                                part = types.Part.from_bytes(data=img_bytes, mime_type=mime)
+                                                parts.append(part)
+                                                logger.info(f"Loaded past image context: {local_path}")
+                                    elif isinstance(att, str):
+                                        logger.info(f"Legacy attachment format (string): {att}. Skipping loading file contents.")
                             except Exception as e_load:
                                 logger.warning(f"Failed to load past image for message {row['message_id']}: {e_load}")
                                 

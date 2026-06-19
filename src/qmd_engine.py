@@ -95,8 +95,8 @@ class QMDEngine:
         3. 非同期で Embedding を取得して SQLite に保存 (バースト保護のバックグラウンドタスク)
         """
         attachments_list = attachments or []
-        # 添付ファイル名のJSONリスト
-        attachments_json = json.dumps([a["filename"] for a in attachments_list], ensure_ascii=False)
+        # 添付ファイルのメタデータJSONリスト
+        attachments_json = json.dumps(attachments_list, ensure_ascii=False)
 
         # 1. 日本語トークナイズ
         token_list = self.tokenizer.tokenize(content)
