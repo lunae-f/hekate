@@ -49,3 +49,4 @@ trigger_keywords = [
     "動かん", "おしえて", "わからん", "不具合", "クラッシュ", 
     "？", "?"
 ]
+max_messages_after_agent = 3

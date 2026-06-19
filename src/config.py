@@ -36,6 +36,7 @@ class Config:
         self.search_range_months = 3
         self.max_context_chars = 4000
         self.trigger_keywords = []
+        self.max_messages_after_agent = 3
         
         self.load()
 
@@ -79,5 +80,6 @@ class Config:
         
         filt = data.get("filter", {})
         self.trigger_keywords = filt.get("trigger_keywords", self.trigger_keywords)
+        self.max_messages_after_agent = int(filt.get("max_messages_after_agent", self.max_messages_after_agent))
 
 config = Config()

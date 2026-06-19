@@ -341,15 +341,15 @@ class AgentCog(commands.Cog):
             primary_msg.reference.cached_message.author == self.bot.user
         )
 
-        has_attachments = len(all_attachments) > 0
-
         matched_keyword = None
         for kw in config.trigger_keywords:
             if kw in ingest_content:
                 matched_keyword = kw
                 break
         has_trigger_keyword = matched_keyword is not None
-        is_triggered = has_mention or has_attachments or has_trigger_keyword
+        
+        # 添付ファイル単体でのトリガーは廃止
+        is_triggered = has_mention or has_trigger_keyword
 
         if not is_triggered:
             logger.debug(f"Message {primary_msg.id} skipped: No trigger detected.")
@@ -364,10 +364,19 @@ class AgentCog(commands.Cog):
                 logger.info(f"Message {primary_msg.id} ignored: Channel {channel_name} is in ignore list.")
                 return
 
+            # 自動応答に対する経過件数制限の適用
+            elapsed = await self.get_messages_elapsed_since_agent(str(channel.id))
+            if elapsed >= config.max_messages_after_agent:
+                logger.info(
+                    f"Message {primary_msg.id} ignored: "
+                    f"Elapsed messages since last agent reply ({elapsed}) "
+                    f"exceeds limit ({config.max_messages_after_agent})."
+                )
+                return
+
         reasons = []
         if has_mention: reasons.append("メンション検知")
         if has_trigger_keyword: reasons.append(f"キーワード '{matched_keyword}' を検出")
-        if has_attachments: reasons.append("添付ファイル検知")
         
         reason_str = " / ".join(reasons)
         logger.info(f"Message {primary_msg.id} triggered LLM evaluation. (Reason: {reason_str})")
@@ -677,6 +686,34 @@ class AgentCog(commands.Cog):
                         pass
 
         asyncio.create_task(run_llm_chain())
+
+    async def get_messages_elapsed_since_agent(self, channel_id: str) -> int:
+        """最後のBot発言から現在までに何件メッセージが経過したかを返す"""
+        cursor = await self.context.db_conn.execute("""
+            SELECT user_id 
+            FROM chat_history 
+            WHERE channel_id = ? 
+            ORDER BY timestamp DESC, message_id DESC 
+            LIMIT 50
+        """, (channel_id,))
+        rows = await cursor.fetchall()
+        
+        bot_id_str = str(self.bot.user.id)
+        elapsed_count = 0
+        found_bot = False
+        
+        # rows[0] はインジェストしたばかりの最新メッセージなので、rows[1:] から遡る
+        for row in rows[1:]:
+            if row["user_id"] == bot_id_str:
+                found_bot = True
+                break
+            elapsed_count += 1
+            
+        if not found_bot:
+            # 履歴に一度もBotの発言がない、または遠い過去の場合は上限超えとみなす
+            return 9999
+            
+        return elapsed_count
 
 async def setup(bot, context):
     """Cogをロードするための関数"""
