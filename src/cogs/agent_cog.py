@@ -493,11 +493,11 @@ class AgentCog(commands.Cog):
                     # 2回目以降のループ時に進捗をDiscord上のThinkingにフィードバック
                     if retry_count > 0 and status_msg:
                         try:
-                            step_desc = f"過去のログを探索しています... (残り {max_retries - retry_count} 回)"
+                            step_desc = "過去のログを探索しています..."
                             if target_date:
-                                step_desc = f"{target_date} のログを追加ロード中... (残り {max_retries - retry_count} 回)"
+                                step_desc = f"{target_date} のログを追加ロード中..."
                             elif current_offset > 15:
-                                step_desc = f"さらにメッセージを {current_offset - 15} 件遡っています... (残り {max_retries - retry_count} 回)"
+                                step_desc = f"さらに過去のメッセージを遡っています..."
                                 
                             status_embed.description = step_desc
                             await status_msg.edit(embed=status_embed)
