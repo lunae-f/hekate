@@ -75,18 +75,32 @@ class AIAgent:
 
     def build_tools(self) -> list:
         tools = []
-        if self.config.enable_code_execution:
+        has_code_execution = self.config.enable_code_execution
+        has_google_maps = self.config.enable_google_maps
+
+        # API制約: google_maps と code_execution は同時に指定できないため競合を回避
+        if has_code_execution and has_google_maps:
+            logger.warning("Gemini API constraint: 'google_maps' and 'code_execution' cannot be combined. Prioritizing 'code_execution' and disabling 'google_maps'.")
+            has_google_maps = False
+
+        if has_code_execution:
             tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
         if self.config.enable_google_search:
             tools.append(types.Tool(google_search=types.GoogleSearch()))
-        if self.config.enable_google_maps:
+        if has_google_maps:
             tools.append(types.Tool(google_maps=types.GoogleMaps()))
         if self.config.enable_url_context:
             tools.append({"url_context": {}})
         return tools
 
     def build_tool_config(self) -> types.ToolConfig | None:
-        if self.config.enable_google_maps:
+        has_code_execution = self.config.enable_code_execution
+        has_google_maps = self.config.enable_google_maps
+
+        if has_code_execution and has_google_maps:
+            has_google_maps = False
+
+        if has_google_maps:
             return types.ToolConfig(
                 retrieval_config=types.RetrievalConfig(
                     lat_lng=types.LatLng(

@@ -27,7 +27,7 @@ generator_instruction = """
 
 [gemini.tools]
 enable_google_search = true
-enable_google_maps = true
+enable_google_maps = false           # ※注意: enable_code_execution=true と同時に有効にすることはできません (API制約)
 enable_url_context = true
 default_latitude = 35.681236
 default_longitude = 139.767125
