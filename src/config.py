@@ -23,6 +23,12 @@ class Config:
         self.evaluator_instruction = ""
         self.generator_instruction = ""
         
+        self.enable_google_search = False
+        self.enable_google_maps = False
+        self.enable_url_context = False
+        self.default_latitude = 35.681236
+        self.default_longitude = 139.767125
+        
         self.bm25_weight = 0.4
         self.vector_weight = 0.6
         self.top_k = 3
@@ -55,6 +61,13 @@ class Config:
         self.system_instruction = gemini.get("system_instruction", self.system_instruction).strip()
         self.evaluator_instruction = gemini.get("evaluator_instruction", self.system_instruction).strip()
         self.generator_instruction = gemini.get("generator_instruction", self.system_instruction).strip()
+        
+        tools = gemini.get("tools", {})
+        self.enable_google_search = bool(tools.get("enable_google_search", self.enable_google_search))
+        self.enable_google_maps = bool(tools.get("enable_google_maps", self.enable_google_maps))
+        self.enable_url_context = bool(tools.get("enable_url_context", self.enable_url_context))
+        self.default_latitude = float(tools.get("default_latitude", self.default_latitude))
+        self.default_longitude = float(tools.get("default_longitude", self.default_longitude))
         
         retrieval = data.get("retrieval", {})
         self.bm25_weight = float(retrieval.get("bm25_weight", self.bm25_weight))

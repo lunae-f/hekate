@@ -13,7 +13,7 @@ import pytz
 from google.genai import types
 
 from src.config import config
-from src.agent import AgentReply
+from src.agent import AgentReply, GeneratedResponse
 from src.ui import CancelView, create_status_embed
 
 logger = logging.getLogger("agent_cog")
@@ -601,10 +601,11 @@ class AgentCog(commands.Cog):
                         image_parts
                     )
                 else:
-                    reply = AgentReply(
+                    reply = GeneratedResponse(
                         reply_content=decision.reply_content,
                         attachment_content=decision.attachment_content,
-                        attachment_filename=decision.attachment_filename
+                        attachment_filename=decision.attachment_filename,
+                        sources=None
                     )
 
                 file_to_send = None
@@ -621,10 +622,33 @@ class AgentCog(commands.Cog):
                     file_to_send = discord.File(file_io, filename="reply_long.txt")
                     main_content = "⚠️ 返答が長文（2,000文字超）のため、テキストファイルに変換して添付しました。"
 
+                # 参照ソースがある場合は Embed を追加して送信
+                sources_embed = None
+                if reply.sources:
+                    sources_embed = discord.Embed(
+                        title="🔍 参照された情報ソース",
+                        color=0x3498db
+                    )
+                    description_lines = []
+                    for idx, src in enumerate(reply.sources, 1):
+                        title = src.get("title", "Web Source")
+                        uri = src.get("uri", "")
+                        if uri:
+                            description_lines.append(f"{idx}. [{title}]({uri})")
+                        else:
+                            description_lines.append(f"{idx}. {title}")
+                    sources_embed.description = "\n".join(description_lines)
+
                 if file_to_send:
-                    await channel.send(content=main_content, file=file_to_send)
+                    if sources_embed:
+                        await channel.send(content=main_content, file=file_to_send, embed=sources_embed)
+                    else:
+                        await channel.send(content=main_content, file=file_to_send)
                 else:
-                    await channel.send(content=main_content)
+                    if sources_embed:
+                        await channel.send(content=main_content, embed=sources_embed)
+                    else:
+                        await channel.send(content=main_content)
 
                 try:
                     await status_msg.delete()

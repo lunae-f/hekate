@@ -25,6 +25,13 @@ generator_instruction = """
 与えられた文脈（短期記憶、想起記憶、最新メッセージ）を統合し、設定されたキャラクターの人格（口調やルール）に従って、適切かつ正確な返答を生成してください。長文コードなどを出力する場合は、適宜アタッチメントファイル（attachment_content）に格納して出力してください。
 """
 
+[gemini.tools]
+enable_google_search = true
+enable_google_maps = true
+enable_url_context = true
+default_latitude = 35.681236
+default_longitude = 139.767125
+
 [retrieval]
 bm25_weight = 0.4                       # BM25スコアの重み
 vector_weight = 0.6                     # ベクトル類似度スコアの重み

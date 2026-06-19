@@ -60,12 +60,61 @@ class AgentReply(BaseModel):
     attachment_content: Optional[Union[str, bytes]] = Field(None, description="添付ファイルとして送信したい長文内容またはバイナリデータ。不要なら省略")
     attachment_filename: Optional[Optional[str]] = Field(None, description="添付ファイルのファイル名 (例: 'code.py', 'result.txt', 'image.png')。添付がある場合は必須")
 
+class GeneratedResponse(BaseModel):
+    reply_content: str
+    attachment_content: Optional[Union[str, bytes]] = None
+    attachment_filename: Optional[str] = None
+    sources: Optional[list[dict]] = None
+
 class AIAgent:
     """Gemini API を用いた思考判定と返答生成エージェント"""
     def __init__(self, gemini_client, persona_manager):
         self.config = config
         self.client = gemini_client
         self.persona_manager = persona_manager
+
+    def build_tools(self) -> list:
+        tools = []
+        if self.config.enable_code_execution:
+            tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
+        if self.config.enable_google_search:
+            tools.append(types.Tool(google_search=types.GoogleSearch()))
+        if self.config.enable_google_maps:
+            tools.append(types.Tool(google_maps=types.GoogleMaps()))
+        if self.config.enable_url_context:
+            tools.append({"url_context": {}})
+        return tools
+
+    def build_tool_config(self) -> types.ToolConfig | None:
+        if self.config.enable_google_maps:
+            return types.ToolConfig(
+                retrieval_config=types.RetrievalConfig(
+                    lat_lng=types.LatLng(
+                        latitude=self.config.default_latitude,
+                        longitude=self.config.default_longitude
+                    )
+                )
+            )
+        return None
+
+    def extract_sources(self, response) -> list[dict]:
+        sources = []
+        seen_uris = set()
+        candidate = response.candidates[0] if response.candidates else None
+        if not candidate:
+            return sources
+
+        if candidate.grounding_metadata and candidate.grounding_metadata.grounding_chunks:
+            for chunk in candidate.grounding_metadata.grounding_chunks:
+                if chunk.web and chunk.web.uri:
+                    uri = chunk.web.uri
+                    if uri not in seen_uris:
+                        sources.append({
+                            "title": chunk.web.title or "Web Source",
+                            "uri": uri
+                        })
+                        seen_uris.add(uri)
+        return sources
 
     async def evaluate_and_reply(
         self,
@@ -156,7 +205,7 @@ channel: #{channel_name}
         message_id: str,
         model_name: str,
         image_parts: list = None
-    ) -> AgentReply:
+    ) -> GeneratedResponse:
         """
         指定されたモデルを用いて、キャラクター設定に沿った返答と必要に応じたファイル添付データを生成する
         """
@@ -178,9 +227,9 @@ channel: #{channel_name}
         if image_parts:
             contents.extend(image_parts)
 
-        tools = []
-        if self.config.enable_code_execution:
-            tools.append(types.Tool(code_execution=types.ToolCodeExecution))
+        # 動的なツール定義と設定の取得
+        tools = self.build_tools()
+        tool_config = self.build_tool_config()
 
         system_instruction = await self.persona_manager.get_generator_instruction(self.config.generator_instruction)
 
@@ -193,6 +242,7 @@ channel: #{channel_name}
                 response_mime_type="application/json",
                 response_schema=AgentReply,
                 tools=tools if tools else None,
+                tool_config=tool_config,
             )
         )
         
@@ -206,12 +256,15 @@ channel: #{channel_name}
         reply = AgentReply(**data)
 
         # Geminiのコード実行（Code Execution）により画像等のバイナリが生成されたかチェック
+        attachment_content = reply.attachment_content
+        attachment_filename = reply.attachment_filename
+
         try:
             if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 for part in response.candidates[0].content.parts:
                     if part.inline_data:
                         # 画像データを抽出して添付ファイルとしてアタッチ
-                        reply.attachment_content = part.inline_data.data
+                        attachment_content = part.inline_data.data
                         
                         # ファイル名が設定されていない、または画像拡張子でない場合は自動でファイル名を決定
                         mime = part.inline_data.mime_type or "image/png"
@@ -222,27 +275,36 @@ channel: #{channel_name}
                             ext = "gif"
                             
                         # アタッチメント名が空、または拡張子が画像でない場合は上書き
-                        if not reply.attachment_filename or not reply.attachment_filename.endswith(f".{ext}"):
-                            reply.attachment_filename = f"plot.{ext}"
+                        if not attachment_filename or not attachment_filename.endswith(f".{ext}"):
+                            attachment_filename = f"plot.{ext}"
                             
-                        logger.info(f"Detected inline_data from code execution: mime={mime}, size={len(reply.attachment_content)} bytes. Attached as '{reply.attachment_filename}'.")
+                        logger.info(f"Detected inline_data from code execution: mime={mime}, size={len(attachment_content)} bytes. Attached as '{attachment_filename}'.")
                         break # 1つ目の画像を処理したら抜ける
         except Exception as e:
             logger.warning(f"Failed to check/extract inline_data from response: {e}")
 
+        # ソース情報の抽出
+        sources = self.extract_sources(response)
+
         # 添付ファイル情報
         att_info = ""
-        if reply.attachment_filename:
-            if isinstance(reply.attachment_content, bytes):
-                size_bytes = len(reply.attachment_content)
+        if attachment_filename:
+            if isinstance(attachment_content, bytes):
+                size_bytes = len(attachment_content)
             else:
-                size_bytes = len(reply.attachment_content.encode("utf-8")) if reply.attachment_content else 0
-            att_info = f", Attachment: '{reply.attachment_filename}' [{size_bytes} bytes]"
+                size_bytes = len(attachment_content.encode("utf-8")) if attachment_content else 0
+            att_info = f", Attachment: '{attachment_filename}' [{size_bytes} bytes]"
         
+        src_info = f", Sources: {len(sources)}" if sources else ""
         reply_len = len(reply.reply_content) if reply.reply_content else 0
-        logger.info(f"Reply generated successfully. (Length: {reply_len} chars{att_info})")
+        logger.info(f"Reply generated successfully. (Length: {reply_len} chars{att_info}{src_info})")
 
-        return reply
+        return GeneratedResponse(
+            reply_content=reply.reply_content,
+            attachment_content=attachment_content,
+            attachment_filename=attachment_filename,
+            sources=sources if sources else None
+        )
 
     async def generate_scheduled_reply(self, context: str, instruction: str) -> str:
         """
