@@ -105,6 +105,7 @@ class AgentCog(commands.Cog):
             embed.add_field(name="返答モデル", value=config.generator_model, inline=True)
             embed.add_field(name="登録スケジュール数", value=str(len(tasks_list)), inline=True)
             embed.add_field(name="キャッシュされたログ件数", value=f"{log_count} 件", inline=True)
+            embed.add_field(name="トリガーキーワード数", value=f"{len(config.trigger_keywords)} 個", inline=True)
             
             await interaction.followup.send(embed=embed)
         except Exception as e:
@@ -193,13 +194,24 @@ class AgentCog(commands.Cog):
             primary_msg.reference.cached_message.author == self.bot.user
         )
 
-        is_triggered = has_mention
+        has_attachments = len(all_attachments) > 0
+
+        matched_keyword = None
+        for kw in config.trigger_keywords:
+            if kw in ingest_content:
+                matched_keyword = kw
+                break
+        has_trigger_keyword = matched_keyword is not None
+        is_triggered = has_mention or has_attachments or has_trigger_keyword
 
         if not is_triggered:
             logger.debug(f"Message {primary_msg.id} skipped: No trigger detected.")
             return
 
-        reasons = ["メンション検知"]
+        reasons = []
+        if has_mention: reasons.append("メンション検知")
+        if has_trigger_keyword: reasons.append(f"キーワード '{matched_keyword}' を検出")
+        if has_attachments: reasons.append("添付ファイル検知")
         
         reason_str = " / ".join(reasons)
         logger.info(f"Message {primary_msg.id} triggered LLM evaluation. (Reason: {reason_str})")
@@ -217,9 +229,30 @@ class AgentCog(commands.Cog):
                     {"message_id": str(m.id), "username": m.author.display_name, "content": m.clean_content} for m in messages
                 ])
 
+                # データベースから、今回のメッセージを除く直近15件のメッセージを取得
+                recent_ids = [str(m.id) for m in messages]
+                placeholders = ",".join(["?"] * len(recent_ids))
+                
+                cursor = await self.context.db_conn.execute(f"""
+                SELECT username, content, timestamp
+                FROM chat_history
+                WHERE channel_id = ? AND message_id NOT IN ({placeholders})
+                ORDER BY timestamp DESC
+                LIMIT 15
+                """, (str(channel.id), *recent_ids))
+                history_rows = await cursor.fetchall()
+                
+                # 時系列順（昇順）に並べ替え
+                history_rows = sorted(history_rows, key=lambda r: r["timestamp"])
+                
                 recent_history_lines = []
+                for row in history_rows:
+                    recent_history_lines.append(f"{row['username']}: {row['content']}")
+                
+                # デバウンスバッファに複数メッセージがある場合、最後の1つ以外を末尾に追加
                 for msg in messages[:-1]:
                     recent_history_lines.append(f"{msg.author.display_name}: {msg.clean_content}")
+                    
                 recent_history = "\n".join(recent_history_lines)
 
                 image_parts = []
@@ -247,6 +280,7 @@ class AgentCog(commands.Cog):
                         context_data,
                         recent_history,
                         current_message_with_attachments,
+                        channel.name,
                         str(primary_msg.id),
                         now_iso,
                         image_parts
@@ -307,6 +341,7 @@ class AgentCog(commands.Cog):
                         context_data, 
                         recent_history, 
                         current_message_with_attachments,
+                        channel.name,
                         str(primary_msg.id), 
                         config.model_premium, 
                         image_parts

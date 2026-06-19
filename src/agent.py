@@ -56,6 +56,7 @@ class AIAgent:
         context: str,
         recent_history: str,
         current_message: str,
+        channel_name: str,
         message_id: str,
         current_time_iso: str,
         image_parts: list = None
@@ -80,6 +81,7 @@ class AIAgent:
 
         prompt = f"""
 current_time: {time_display}
+channel: #{channel_name}
 
 以下は過去の文脈および直近の会話履歴です。これらを踏まえて、最新メッセージに対して自分が応答すべきか、応答する場合に返答メッセージを生成し、かつより高性能なモデル（gemini-3.5-flash）へのエスカレーションが必要であるかを判定してください。
 
@@ -132,6 +134,7 @@ current_time: {time_display}
         context: str,
         recent_history: str,
         current_message: str,
+        channel_name: str,
         message_id: str,
         model_name: str,
         image_parts: list = None
@@ -142,6 +145,8 @@ current_time: {time_display}
         logger.info(f"Generating reply with {model_name}...")
 
         prompt = f"""
+channel: #{channel_name}
+
 以下は過去の関連文脈および直近の会話履歴です。最新のメッセージに対して、キャラクター設定に従って適切な返答を生成してください。長文コードなどを出力する場合は、適宜アタッチメントファイル（attachment_content）に格納して出力してください。
 
 # 過去の関連文脈 (想起記憶)
